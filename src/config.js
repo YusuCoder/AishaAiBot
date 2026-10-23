@@ -26,7 +26,7 @@ export const config = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY || null,
     model: process.env.OPENAI_MODEL || 'gpt-5-mini',
-    reasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? 'minimal',
+    reasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? 'low',
     teamLanguage: process.env.TEAM_LANGUAGE || 'Russian',
   },
   // Used in the signature of AI-written replies, e.g. "Pozdrawiamy, zespół Aisha".

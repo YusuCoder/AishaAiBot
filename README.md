@@ -65,7 +65,7 @@ npm start
 | `TELEGRAM_CHAT_ID` | Seller's Telegram chat id. Leave empty, send `/start` to the bot and it will reply with the id |
 | `OPENAI_API_KEY` | Optional. Enables translation |
 | `OPENAI_MODEL` | OpenAI model for translation, default `gpt-5-mini` |
-| `OPENAI_REASONING_EFFORT` | `minimal` for gpt-5 models; leave empty for non-reasoning models |
+| `OPENAI_REASONING_EFFORT` | `low` for gpt-5 models (`minimal` is faster but misreads typos); leave empty for non-reasoning models |
 | `TEAM_LANGUAGE` | Language the team reads and writes, default `Russian` |
 | `SHOP_NAME` | Optional. Shop name used to sign AI-written replies |
 | `POLL_INTERVAL_SEC` | How often to check Allegro, default `30` |

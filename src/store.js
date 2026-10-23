@@ -77,6 +77,16 @@ export const store = {
     return null;
   },
 
+  // Offer title each conversation is about — context for translations (typos, product terms).
+  threadProduct(threadId) {
+    return state.products?.[threadId] ?? null;
+  },
+  setThreadProduct(threadId, title) {
+    if (!title || state.products?.[threadId] === title) return;
+    state.products = { ...state.products, [threadId]: title };
+    save();
+  },
+
   // AI-written replies waiting for "Send" / "Cancel", keyed by the preview message id.
   setDraft(previewMessageId, draft) {
     state.drafts = { ...state.drafts, [previewMessageId]: draft };

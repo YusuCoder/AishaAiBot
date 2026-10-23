@@ -77,13 +77,15 @@ function buyerLogin(thread) {
 const TRANSLATE_BUTTON = { inline_keyboard: [[{ text: '🌐 Перевести', callback_data: 'tr' }]] };
 
 /** Sends a message; when translation is on and there is text, adds a "Translate" button under it. */
-async function sendTranslatable(html, plainText, extra = {}) {
+async function sendTranslatable(threadId, html, plainText, extra = {}) {
   const withButton = translationEnabled && Boolean(plainText);
   const sent = await telegram.sendMessage(chatId, html, {
     ...extra,
     ...(withButton ? { reply_markup: TRANSLATE_BUTTON } : {}),
   });
-  if (withButton) store.setTranslatable(sent.message_id, { html, text: plainText });
+  if (withButton) {
+    store.setTranslatable(sent.message_id, { html, text: plainText, product: store.threadProduct(threadId) });
+  }
   return sent;
 }
 
@@ -110,7 +112,7 @@ async function onTranslateClick(query) {
 
   translating.add(messageId);
   try {
-    const t = await translateForTeam(item.text);
+    const t = await translateForTeam(item.text, { product: item.product });
     const translation = t.isTeamLanguage
       ? '<i>Сообщение уже на вашем языке.</i>'
       : `${flag(config.openai.teamLanguage)} <i>${escapeHtml(t.translation)}</i>`;
@@ -147,7 +149,7 @@ async function forwardAsReplyable(thread, message) {
     '',
     '<i>↩️ Ответьте на это сообщение, чтобы написать покупателю.</i>',
   ].join('\n');
-  const sent = await sendTranslatable(text, message.text);
+  const sent = await sendTranslatable(thread.id, text, message.text);
   store.linkTelegramMessage(sent.message_id, thread.id, buyerLogin(thread));
 }
 
@@ -185,6 +187,7 @@ async function createTopic(thread, firstMessage, history) {
     const header = '🕘 <b>Предыдущие сообщения:</b>\n\n';
     while (items.length > 1 && (header + items.map((i) => i.html).join('\n\n')).length > 2000) items = items.slice(1);
     await sendTranslatable(
+      thread.id,
       header + items.map((i) => i.html).join('\n\n').slice(0, 4000),
       items.map((i) => i.plain).join('\n\n'),
       { message_thread_id: topicId },
@@ -196,13 +199,13 @@ async function createTopic(thread, firstMessage, history) {
 async function sendToTopic(thread, message, history, text) {
   const topicId = store.topicForThread(thread.id)?.topicId ?? (await createTopic(thread, message, history));
   try {
-    await sendTranslatable(text, message.text, { message_thread_id: topicId });
+    await sendTranslatable(thread.id, text, message.text, { message_thread_id: topicId });
   } catch (err) {
     if (!/thread not found/i.test(err.message)) throw err;
     // Someone deleted the topic — start a new one.
     store.setTopic(thread.id, null);
     const newTopicId = await createTopic(thread, message, history);
-    await sendTranslatable(text, message.text, { message_thread_id: newTopicId });
+    await sendTranslatable(thread.id, text, message.text, { message_thread_id: newTopicId });
   }
 }
 
@@ -240,6 +243,8 @@ async function checkAllegro() {
     if (lastSeenMs && Date.parse(thread.lastMessageDateTime) <= lastSeenMs) continue;
 
     const chrono = (await allegro.listMessages(thread.id)).reverse();
+    const offerId = chrono.findLast((m) => m.relatesTo?.offer?.id)?.relatesTo.offer.id;
+    if (offerId) store.setThreadProduct(thread.id, await offerTitle(offerId));
     const fresh = pickNew(chrono, thread, lastSeenMs, firstRun);
     const history = chrono.slice(0, chrono.length - fresh.length).slice(-HISTORY_LIMIT);
 
