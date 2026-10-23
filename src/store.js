@@ -77,6 +77,22 @@ export const store = {
     return null;
   },
 
+  // Disputes / complaints: subject, order, last known status — keyed "issue:<id>".
+  issueMeta(key) {
+    return state.issues?.[key] ?? null;
+  },
+  setIssueMeta(key, meta) {
+    state.issues = { ...state.issues, [key]: meta };
+    save();
+  },
+  get issuesInitialized() {
+    return Boolean(state.issuesInitialized);
+  },
+  markIssuesInitialized() {
+    state.issuesInitialized = true;
+    save();
+  },
+
   // Offer title each conversation is about — context for translations (typos, product terms).
   threadProduct(threadId) {
     return state.products?.[threadId] ?? null;

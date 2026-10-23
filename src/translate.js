@@ -113,10 +113,11 @@ const REPLY_SCHEMA = {
  * Turns a team member's short, informal note ("ok, we'll refund") into a complete,
  * professional and friendly reply in the customer's language — without changing its meaning.
  * @param {string} note what the team member wrote
- * @param {{ conversation: {fromCustomer: boolean, text: string}[], firstName?: string|null }} context
+ * @param {{ conversation: {author: 'Customer'|'Shop'|'Allegro', text: string}[], firstName?: string|null,
+ *           situation?: string }} context
  * @returns {{ language: string, reply: string, teamVersion: string }}
  */
-export async function composeReply(note, { conversation, firstName }) {
+export async function composeReply(note, { conversation, firstName, situation }) {
   const shop = config.shopName ? `the ${config.shopName} team` : 'the shop team';
   const system = [
     `You write replies to customers on behalf of the support team of an online shop selling on Allegro.`,
@@ -139,9 +140,10 @@ export async function composeReply(note, { conversation, firstName }) {
   ].join('\n');
   const user = [
     `Customer's first name: ${firstName || 'unknown'}`,
+    ...(situation ? [`Situation: ${situation}`] : []),
     ``,
     `Recent conversation (oldest first):`,
-    ...conversation.map((m) => `${m.fromCustomer ? 'Customer' : 'Shop'}: ${m.text}`),
+    ...conversation.map((m) => `${m.author}: ${m.text}`),
     ``,
     `Team member's note to turn into the reply:`,
     `"""${note}"""`,

@@ -162,10 +162,20 @@ async function createTopic(thread, firstMessage, history) {
   const topicId = topic.message_thread_id;
   store.setTopic(thread.id, topicId, login);
 
-  const intro = [
-    `🛒 Покупатель: <b>${escapeHtml(login)}</b>`,
-    ...contextLines(firstMessage, title),
-    '',
+  const intro = [`🛒 Покупатель: <b>${escapeHtml(login)}</b>`, ...contextLines(firstMessage, title), '', ...howToLines()];
+  await telegram.sendMessage(chatId, intro.join('\n'), { message_thread_id: topicId });
+
+  await sendHistory(
+    thread.id,
+    login,
+    history.map((m) => ({ createdAt: m.createdAt, text: m.text, role: m.author?.isInterlocutor ? 'BUYER' : 'SELLER' })),
+    topicId,
+  );
+  return topicId;
+}
+
+function howToLines() {
+  return [
     '✍️ Всё, что вы напишете в этой теме, отправится покупателю в Allegro.',
     `💡 Начните сообщение с <code>${NOTE_PREFIX}</code> — это внутренняя заметка, покупатель её не увидит.`,
     ...(translationEnabled
@@ -175,25 +185,27 @@ async function createTopic(thread, firstMessage, history) {
           `Начните с <code>${RAW_PREFIX}</code>, чтобы сразу отправить текст как есть, без ИИ.`,
         ]
       : []),
-  ].join('\n');
-  await telegram.sendMessage(chatId, intro, { message_thread_id: topicId });
+  ];
+}
 
-  if (history.length) {
-    let items = history.map((m) => ({
-      html: `<i>${formatTime(m.createdAt)}</i> ${m.author?.isInterlocutor ? `👤 ${escapeHtml(login)}` : '🏪 Вы'}: ${escapeHtml(m.text || '(без текста)')}`,
-      plain: `${m.author?.isInterlocutor ? login : 'Вы'}: ${m.text || ''}`,
-    }));
-    // Leave room for the translation under it — drop the oldest lines rather than cutting HTML in half.
-    const header = '🕘 <b>Предыдущие сообщения:</b>\n\n';
-    while (items.length > 1 && (header + items.map((i) => i.html).join('\n\n')).length > 2000) items = items.slice(1);
-    await sendTranslatable(
-      thread.id,
-      header + items.map((i) => i.html).join('\n\n').slice(0, 4000),
-      items.map((i) => i.plain).join('\n\n'),
-      { message_thread_id: topicId },
-    );
-  }
-  return topicId;
+/** Earlier messages of a conversation, as one message with a Translate button. */
+async function sendHistory(key, login, history, topicId) {
+  if (!history.length) return;
+  const who = (role) => (role === 'BUYER' ? `👤 ${escapeHtml(login)}` : role === 'SELLER' ? '🏪 Вы' : '🛡 Allegro');
+  const whoPlain = (role) => (role === 'BUYER' ? login : role === 'SELLER' ? 'Вы' : 'Allegro');
+  let items = history.map((m) => ({
+    html: `<i>${formatTime(m.createdAt)}</i> ${who(m.role)}: ${escapeHtml(m.text || '(без текста)')}`,
+    plain: `${whoPlain(m.role)}: ${m.text || ''}`,
+  }));
+  // Leave room for the translation under it — drop the oldest lines rather than cutting HTML in half.
+  const header = '🕘 <b>Предыдущие сообщения:</b>\n\n';
+  while (items.length > 1 && (header + items.map((i) => i.html).join('\n\n')).length > 2000) items = items.slice(1);
+  await sendTranslatable(
+    key,
+    header + items.map((i) => i.html).join('\n\n').slice(0, 4000),
+    items.map((i) => i.plain).join('\n\n'),
+    { message_thread_id: topicId },
+  );
 }
 
 async function sendToTopic(thread, message, history, text) {
@@ -265,12 +277,166 @@ async function checkAllegro() {
   if (firstRun) store.markInitialized();
 }
 
+// ---------- Disputes and complaints (Allegro "issues") ----------
+
+const ISSUE_PREFIX = 'issue:';
+const isIssue = (key) => key.startsWith(ISSUE_PREFIX);
+
+const ISSUE_KINDS = {
+  DISPUTE: { icon: '⚠️', name: 'Спор', ai: 'a dispute (discussion) the customer opened on Allegro' },
+  CLAIM: { icon: '📋', name: 'Рекламация', ai: 'a complaint (reklamacja) the customer filed on Allegro' },
+};
+const issueKind = (type) => ISSUE_KINDS[type] ?? { icon: '⚠️', name: 'Обращение', ai: 'a post-purchase issue on Allegro' };
+
+const ISSUE_STATUS = {
+  DISPUTE_ONGOING: '🟠 открыт',
+  DISPUTE_CLOSED: '🔒 закрыт',
+  DISPUTE_UNRESOLVED: '🔴 не решён — подключился Allegro',
+  CLAIM_SUBMITTED: '🟠 подана',
+  CLAIM_ACCEPTED: '✅ принята',
+  CLAIM_REJECTED: '❌ отклонена',
+};
+const issueStatus = (status) => ISSUE_STATUS[status] ?? status ?? '—';
+
+function issueTopicName(meta) {
+  const kind = issueKind(meta.type);
+  return `${kind.icon} ${kind.name} · ${meta.login} · ${meta.subject ?? ''}`.slice(0, 128);
+}
+
+function issueHeaderLines(meta) {
+  const kind = issueKind(meta.type);
+  const product = store.threadProduct(meta.key);
+  return [
+    `${kind.icon} <b>${kind.name}</b>${meta.orderId ? ` по заказу <code>${meta.orderId}</code>` : ''}`,
+    `🛒 Покупатель: <b>${escapeHtml(meta.login)}</b>`,
+    ...(product ? [`📦 ${escapeHtml(product)}`] : []),
+    ...(meta.subject ? [`❓ Причина: ${escapeHtml(meta.subject)}`] : []),
+    `📌 Статус: ${issueStatus(meta.status)}${meta.dueDate ? ` · ⏰ срок: ${formatTime(meta.dueDate)}` : ''}`,
+  ];
+}
+
+async function ensureIssueTopic(meta, history) {
+  const existing = store.topicForThread(meta.key)?.topicId;
+  if (existing) return existing;
+  const topic = await telegram.createForumTopic(chatId, issueTopicName(meta));
+  const topicId = topic.message_thread_id;
+  store.setTopic(meta.key, topicId, meta.login);
+  await telegram.sendMessage(chatId, [...issueHeaderLines(meta), '', ...howToLines()].join('\n'), {
+    message_thread_id: topicId,
+  });
+  await sendHistory(meta.key, meta.login, history, topicId);
+  return topicId;
+}
+
+/** Posts into the issue's topic (forum mode) or as a replyable message (reply mode). */
+async function sendIssueUpdate(meta, history, html, plainText) {
+  if (!forumMode) {
+    const kind = issueKind(meta.type);
+    const text = [
+      `${kind.icon} <b>${kind.name}</b> · <b>${escapeHtml(meta.login)}</b> · ${escapeHtml(meta.subject ?? '')}`,
+      '',
+      html,
+      '',
+      '<i>↩️ Ответьте на это сообщение, чтобы написать покупателю.</i>',
+    ].join('\n');
+    const sent = await sendTranslatable(meta.key, text, plainText);
+    store.linkTelegramMessage(sent.message_id, meta.key, meta.login);
+    return;
+  }
+  for (let attempt = 1; ; attempt++) {
+    const topicId = await ensureIssueTopic(meta, history);
+    try {
+      await sendTranslatable(meta.key, html, plainText, { message_thread_id: topicId });
+      return;
+    } catch (err) {
+      if (attempt > 1 || !/thread not found/i.test(err.message)) throw err;
+      store.setTopic(meta.key, null); // topic was deleted — make a new one
+    }
+  }
+}
+
+function issueMessageHtml(m) {
+  const attachments = m.attachments?.length ? `\n📎 Вложений: ${m.attachments.length} (откройте в Allegro)` : '';
+  const text = escapeHtml(m.text || '(без текста)');
+  if (m.author?.role === 'BUYER') return `💬 ${text}${attachments}`;
+  if (m.author?.role === 'SELLER') return `📤 <i>Ответ с сайта Allegro:</i>\n${text}${attachments}`;
+  return `🛡 <b>Allegro:</b>\n${text}${attachments}`;
+}
+
+async function checkIssues() {
+  const firstRun = !store.issuesInitialized;
+  const issues = await allegro.listIssues();
+
+  for (const issue of issues) {
+    const key = ISSUE_PREFIX + issue.id;
+    const known = store.issueMeta(key);
+    const lastMessageAt = issue.chat?.lastMessage?.createdAt ?? null;
+    const lastSeen = store.lastSeen(key);
+    const lastSeenMs = lastSeen ? Date.parse(lastSeen) : null;
+    const hasNew = Boolean(lastMessageAt) && (!lastSeenMs || Date.parse(lastMessageAt) > lastSeenMs);
+    const status = issue.currentState?.status ?? null;
+    const statusChanged = Boolean(known) && known.status !== status;
+    if (known && !hasNew && !statusChanged) continue;
+
+    if (!known && issue.checkoutForm?.id) {
+      const order = await allegro.order(issue.checkoutForm.id);
+      store.setThreadProduct(key, order?.lineItems?.[0]?.offer?.name);
+    }
+    const meta = {
+      key,
+      type: issue.type,
+      subject: issue.subject,
+      orderId: issue.checkoutForm?.id ?? null,
+      login: issue.buyer?.login ?? 'Покупатель',
+      status,
+      // The due date only matters while the issue is open.
+      dueDate: issue.currentState?.chatActive ? (issue.currentState?.statusDueDate ?? null) : null,
+    };
+    store.setIssueMeta(key, meta);
+
+    // On the very first run only bring in open issues still waiting for our answer.
+    const waitingForUs = issue.currentState?.chatActive && issue.chat?.lastMessage?.status !== 'SELLER_REPLIED';
+    if (hasNew && (lastSeenMs || !firstRun || waitingForUs)) {
+      const chat = await allegro.issueChat(issue.id);
+      const lastOurs = chat.findLastIndex((m) => m.author?.role === 'SELLER');
+      const fresh = lastSeenMs
+        ? chat.filter((m) => Date.parse(m.createdAt) > lastSeenMs)
+        : chat.slice(lastOurs + 1);
+      const history = chat
+        .slice(0, chat.length - fresh.length)
+        .slice(-HISTORY_LIMIT)
+        .map((m) => ({ createdAt: m.createdAt, text: m.text, role: m.author?.role }));
+
+      for (const m of fresh) {
+        const ours = m.author?.role === 'SELLER';
+        if (!ours || (forumMode && !store.sentByBot(m.id))) {
+          await sendIssueUpdate(meta, history, issueMessageHtml(m), m.text);
+        }
+        store.setLastSeen(key, m.createdAt);
+      }
+    }
+    if (lastMessageAt) store.setLastSeen(key, lastMessageAt);
+
+    if (statusChanged) {
+      const html = `📌 <b>Статус изменён:</b> ${issueStatus(status)}${meta.dueDate ? ` · ⏰ срок: ${formatTime(meta.dueDate)}` : ''}`;
+      if (!forumMode || store.topicForThread(key)) await sendIssueUpdate(meta, [], html, null);
+    }
+  }
+
+  if (firstRun) store.markIssuesInitialized();
+}
+
 async function pollAllegro() {
   for (;;) {
     try {
       await checkAllegro();
     } catch (err) {
       console.error('Allegro polling error:', err.message);
+    }
+    try {
+      await checkIssues();
+    } catch (err) {
+      console.error('Allegro issues polling error:', err.message);
     }
     await new Promise((r) => setTimeout(r, config.pollIntervalMs));
   }
@@ -283,20 +449,46 @@ function senderName(from) {
   return from.username ? `@${from.username}` : [from.first_name, from.last_name].filter(Boolean).join(' ');
 }
 
-async function postToAllegro(threadId, text) {
-  const sent = await allegro.sendMessage(threadId, text);
+/** Posts the team's reply to a message thread or an issue (dispute / complaint) chat. */
+async function postToAllegro(key, text) {
+  if (isIssue(key)) {
+    const sent = await allegro.sendIssueMessage(key.slice(ISSUE_PREFIX.length), text);
+    if (sent?.id) store.markSentByBot(sent.id);
+    return;
+  }
+  const sent = await allegro.sendMessage(key, text);
   if (sent?.id) store.markSentByBot(sent.id);
-  await allegro.markThreadRead(threadId).catch(() => {});
+  await allegro.markThreadRead(key).catch(() => {});
 }
 
-/** Recent conversation and the buyer's first name (from a related order), for the AI. */
-async function replyContext(threadId) {
-  const chrono = (await allegro.listMessages(threadId, 8)).reverse();
+/** Recent conversation, the buyer's first name (from the order) and the situation, for the AI. */
+async function replyContext(key) {
+  const clip = (text) => text.slice(0, 1000);
+  if (isIssue(key)) {
+    const meta = store.issueMeta(key);
+    const chat = (await allegro.issueChat(key.slice(ISSUE_PREFIX.length))).slice(-8);
+    const product = store.threadProduct(key);
+    return {
+      conversation: chat
+        .filter((m) => m.text)
+        .map((m) => ({
+          author: m.author?.role === 'BUYER' ? 'Customer' : m.author?.role === 'SELLER' ? 'Shop' : 'Allegro',
+          text: clip(m.text),
+        })),
+      firstName: meta?.orderId ? await allegro.orderBuyerFirstName(meta.orderId) : null,
+      situation: [
+        `This is ${issueKind(meta?.type).ai}. Reason given: "${meta?.subject ?? 'unknown'}".`,
+        ...(product ? [`Product: ${product}.`] : []),
+        `Allegro staff may read this conversation: stay calm, factual and courteous.`,
+      ].join(' '),
+    };
+  }
+  const chrono = (await allegro.listMessages(key, 8)).reverse();
   const orderId = chrono.findLast((m) => m.relatesTo?.order?.id)?.relatesTo.order.id;
   return {
     conversation: chrono
       .filter((m) => m.text)
-      .map((m) => ({ fromCustomer: Boolean(m.author?.isInterlocutor), text: m.text.slice(0, 1000) })),
+      .map((m) => ({ author: m.author?.isInterlocutor ? 'Customer' : 'Shop', text: clip(m.text) })),
     firstName: orderId ? await allegro.orderBuyerFirstName(orderId) : null,
   };
 }

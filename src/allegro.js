@@ -93,20 +93,24 @@ async function accessToken() {
 
 // ---------- REST ----------
 
-async function api(method, path, body, retried = false) {
+// Some endpoints (issues, customer returns) are only served in the beta representation.
+const BETA_MEDIA_TYPE = 'application/vnd.allegro.beta.v1+json';
+
+async function api(method, path, body, { beta = false } = {}, retried = false) {
+  const mediaType = beta ? BETA_MEDIA_TYPE : MEDIA_TYPE;
   const res = await fetch(`${apiUrl}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${await accessToken()}`,
-      Accept: MEDIA_TYPE,
-      ...(body ? { 'Content-Type': MEDIA_TYPE } : {}),
+      Accept: mediaType,
+      ...(body ? { 'Content-Type': mediaType } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
 
   if (res.status === 401 && !retried) {
     store.setTokens({ ...store.tokens, expiresAt: 0 }); // force refresh
-    return api(method, path, body, true);
+    return api(method, path, body, { beta }, true);
   }
   if (!res.ok) throw new Error(`Allegro ${method} ${path} → ${res.status}: ${await res.text()}`);
   return res.status === 204 ? null : res.json().catch(() => null);
@@ -136,12 +140,35 @@ export const allegro = {
 
   /** Buyer's first name from an order (needs the orders:read scope), or null. */
   async orderBuyerFirstName(orderId) {
+    return (await this.order(orderId))?.buyer?.firstName ?? null;
+  },
+
+  /** An order (checkout form), or null if it can't be read. */
+  async order(orderId) {
     try {
-      const order = await api('GET', `/order/checkout-forms/${orderId}`);
-      return order?.buyer?.firstName ?? null;
+      return await api('GET', `/order/checkout-forms/${orderId}`);
     } catch {
       return null;
     }
+  },
+
+  // ----- Post-purchase issues: disputes (DISPUTE) and complaints (CLAIM) -----
+
+  /** Most recent issues first. */
+  async listIssues(limit = 50) {
+    const { issues } = await api('GET', `/sale/issues?limit=${limit}&offset=0`, null, { beta: true });
+    return issues;
+  },
+
+  /** Chat messages of an issue, oldest first. */
+  async issueChat(issueId, limit = 50) {
+    const { chat } = await api('GET', `/sale/issues/${issueId}/chat?limit=${limit}&offset=0`, null, { beta: true });
+    return [...chat].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  },
+
+  /** Posts the seller's message to an issue chat; returns the created message if Allegro sends it back. */
+  sendIssueMessage(issueId, text) {
+    return api('POST', `/sale/issues/${issueId}/message`, { text, attachments: [] }, { beta: true });
   },
 
   async offerTitle(offerId) {

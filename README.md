@@ -32,7 +32,7 @@ Buyer ◄── Allegro messages ◄── AishaAiBot ◄── Seller's reply
 | | |
 |---|---|
 | OAuth flow | Device flow (`device_code`), used by the account owner only |
-| Main scopes | `allegro:api:messaging`, `allegro:api:sale:offers:read` |
+| Main scopes | `allegro:api:messaging`, `allegro:api:disputes`, `allegro:api:sale:offers:read`, `allegro:api:orders:read` |
 | Polling | One threads request every 30 s, plus message/offer requests only for threads with new activity |
 | User-Agent | Every request sends the User-Agent generated in the Allegro Developer Portal |
 
@@ -90,6 +90,20 @@ Each Allegro conversation gets its own topic, so long conversations stay togethe
 Setup: create a Telegram group, enable **Topics** in its settings, add the bot as an
 **admin with "Manage topics"**, send `/start` in the group and put the id it shows into
 `TELEGRAM_CHAT_ID`.
+
+### Disputes and complaints
+
+Allegro disputes (*dyskusje*) and complaints (*reklamacje*) are read from the post-purchase
+issues API (`GET /sale/issues`, `GET /sale/issues/{id}/chat`, `POST /sale/issues/{id}/message`,
+beta media type) and handled like messages:
+
+- Each one gets its own topic, e.g. `⚠️ Спор · buyer · I have not received the product`, starting
+  with the order, product, reason, status and deadline, followed by the earlier messages.
+- New messages from the buyer and from Allegro advisors (🛡) are posted in the topic.
+- The team replies the same way as to messages (AI draft → ✅ Отправить). The AI knows it is
+  writing in a dispute and keeps a calm, factual tone.
+- Status changes (e.g. closed) are announced in the topic.
+- On the first start only open issues waiting for the seller's answer are brought in.
 
 ### AI assistant (optional)
 
