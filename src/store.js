@@ -6,8 +6,9 @@ const DIR = new URL('../data/', import.meta.url);
 const FILE = new URL('state.json', DIR);
 
 const MAX_LINKS = 2000;
+const MAX_SENT_IDS = 1000;
 
-let state = { tokens: null, threads: {}, links: {}, initialized: false };
+let state = { tokens: null, threads: {}, links: {}, topics: {}, sentIds: [], initialized: false };
 
 try {
   state = { ...state, ...JSON.parse(readFileSync(FILE, 'utf8')) };
@@ -58,5 +59,31 @@ export const store = {
   },
   threadForTelegramMessage(telegramMessageId) {
     return state.links[telegramMessageId] ?? null;
+  },
+
+  // Forum mode: one Telegram topic per Allegro thread.
+  topicForThread(threadId) {
+    return state.topics[threadId] ?? null;
+  },
+  setTopic(threadId, topicId, buyerLogin) {
+    if (topicId == null) delete state.topics[threadId];
+    else state.topics[threadId] = { topicId, buyerLogin };
+    save();
+  },
+  threadForTopic(topicId) {
+    for (const [threadId, topic] of Object.entries(state.topics)) {
+      if (topic.topicId === topicId) return { threadId, buyerLogin: topic.buyerLogin };
+    }
+    return null;
+  },
+
+  // Allegro message ids we sent from Telegram, so we don't echo them back.
+  markSentByBot(messageId) {
+    state.sentIds.push(messageId);
+    if (state.sentIds.length > MAX_SENT_IDS) state.sentIds.splice(0, state.sentIds.length - MAX_SENT_IDS);
+    save();
+  },
+  sentByBot(messageId) {
+    return state.sentIds.includes(messageId);
   },
 };

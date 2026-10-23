@@ -125,6 +125,7 @@ export const allegro = {
     return messages;
   },
 
+  /** Returns the created message (with its `id`). */
   sendMessage(threadId, text) {
     return api('POST', `/messaging/threads/${threadId}/messages`, { text, attachments: [] });
   },

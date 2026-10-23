@@ -28,6 +28,27 @@ export const telegram = {
     });
   },
 
+  getChat(chatId) {
+    return call('getChat', { chat_id: chatId });
+  },
+
+  async getMyMember(chatId) {
+    const me = await call('getMe');
+    return call('getChatMember', { chat_id: chatId, user_id: me.id });
+  },
+
+  createForumTopic(chatId, name) {
+    return call('createForumTopic', { chat_id: chatId, name: name.slice(0, 128) });
+  },
+
+  react(chatId, messageId, emoji) {
+    return call('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: 'emoji', emoji }],
+    });
+  },
+
   /** Long-polls Telegram forever and passes every incoming message to the handler. */
   async listen(onMessage) {
     let offset = 0;

@@ -69,12 +69,30 @@ in the terminal). Open it, log in to Allegro and approve the app.
 
 ## Usage
 
-- New buyer messages appear in Telegram automatically.
-- To answer, **reply** to the buyer's message in Telegram (swipe left on mobile).
-  The bot confirms with "✅ Sent" or shows the error.
-- `/start` or `/id` shows the current Telegram chat id.
+The bot works in one of two modes, picked automatically from the chat in `TELEGRAM_CHAT_ID`.
 
-The bot only responds to the chat set in `TELEGRAM_CHAT_ID` and ignores everyone else.
+### Group with Topics (recommended for teams)
+
+Each Allegro conversation gets its own topic, so long conversations stay together.
+
+- A new conversation creates a topic named `buyer · offer title`, with the last messages as history.
+- Every new buyer message is posted in that topic; the topic moves to the top with an unread badge.
+- **Anything the team writes in the topic is sent to the buyer.** The bot confirms with 👍.
+- Messages starting with `//` are internal notes and are not sent.
+- Replies the seller sends directly on allegro.pl are mirrored into the topic as well.
+
+Setup: create a Telegram group, enable **Topics** in its settings, add the bot as an
+**admin with "Manage topics"**, send `/start` in the group and put the id it shows into
+`TELEGRAM_CHAT_ID`.
+
+### Private chat or plain group
+
+- New buyer messages appear in the chat.
+- To answer, **reply** to the buyer's message (swipe left on mobile).
+  The bot confirms with "✅" or shows the error.
+
+`/start` or `/id` shows the current Telegram chat id. The bot only responds to the chat
+set in `TELEGRAM_CHAT_ID` and ignores everyone else.
 
 ## Data and privacy
 
