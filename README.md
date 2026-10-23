@@ -67,6 +67,7 @@ npm start
 | `OPENAI_MODEL` | OpenAI model for translation, default `gpt-5-mini` |
 | `OPENAI_REASONING_EFFORT` | `minimal` for gpt-5 models; leave empty for non-reasoning models |
 | `TEAM_LANGUAGE` | Language the team reads and writes, default `Russian` |
+| `SHOP_NAME` | Optional. Shop name used to sign AI-written replies |
 | `POLL_INTERVAL_SEC` | How often to check Allegro, default `30` |
 
 On the first start the bot sends an Allegro authorization link to Telegram (and prints it
@@ -90,15 +91,19 @@ Setup: create a Telegram group, enable **Topics** in its settings, add the bot a
 **admin with "Manage topics"**, send `/start` in the group and put the id it shows into
 `TELEGRAM_CHAT_ID`.
 
-### Translation (optional)
+### AI assistant (optional)
 
 With `OPENAI_API_KEY` set, the team can work in its own language (`TEAM_LANGUAGE`, default Russian):
 
 - Buyer messages arrive in the original language with a **🌐 Перевести** button.
   Pressing it adds the translation under the message (translation is only paid for on demand).
-- Team replies are translated into the language the buyer writes in (Polish by default)
-  before sending. The bot shows the team exactly what the buyer received.
-- Start a reply with `!` to send it exactly as typed, without translation.
+- A team member can answer with a short note, even just "ok". The AI turns it into a complete,
+  professional and friendly reply in the buyer's language: greeting (with the buyer's first name
+  when the conversation is about an order), the answer, and a closing signed with `SHOP_NAME`.
+  It keeps the meaning and never adds facts, deadlines or promises that are not in the note.
+- The bot shows a **draft** (in the buyer's language plus a version in the team's language) with
+  **✅ Отправить / ❌ Отмена**. Nothing reaches the buyer until someone presses Send.
+- Start a reply with `!` to send it immediately, exactly as typed, without AI.
 
 ### Private chat or plain group
 
@@ -113,8 +118,8 @@ set in `TELEGRAM_CHAT_ID` and ignores everyone else.
 
 - Allegro tokens, the last-seen time per thread, and a map of Telegram message → Allegro
   thread are stored locally in `data/state.json`. Nothing is sent anywhere except Allegro
-  and Telegram, and, only when translation is enabled, the message text to the OpenAI API
-  for translation.
+  and Telegram, and, only when the AI assistant is enabled, message texts (and the buyer's
+  first name, when known) to the OpenAI API for translation and reply drafting.
 - Buyer messages are delivered only to the seller's own Telegram chat and are not stored
   by the bot.
 - `.env` and `data/` are excluded from git.

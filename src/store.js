@@ -77,13 +77,16 @@ export const store = {
     return null;
   },
 
-  // The buyer's latest message per thread — tells the translator which language to reply in.
-  lastBuyerText(threadId) {
-    return state.lastBuyerTexts?.[threadId] ?? null;
+  // AI-written replies waiting for "Send" / "Cancel", keyed by the preview message id.
+  setDraft(previewMessageId, draft) {
+    state.drafts = { ...state.drafts, [previewMessageId]: draft };
+    save();
   },
-  setLastBuyerText(threadId, text) {
-    if (!text || state.lastBuyerTexts?.[threadId] === text) return;
-    state.lastBuyerTexts = { ...state.lastBuyerTexts, [threadId]: text.slice(0, 1000) };
+  draft(previewMessageId) {
+    return state.drafts?.[previewMessageId] ?? null;
+  },
+  forgetDraft(previewMessageId) {
+    delete state.drafts?.[previewMessageId];
     save();
   },
 

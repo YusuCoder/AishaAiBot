@@ -2,7 +2,7 @@ import { config } from './config.js';
 import { store } from './store.js';
 import { allegro, authorizeDevice } from './allegro.js';
 import { telegram, escapeHtml } from './telegram.js';
-import { translationEnabled, translateForTeam, translateForBuyer } from './translate.js';
+import { translationEnabled, translateForTeam, composeReply } from './translate.js';
 
 const chatId = config.telegram.chatId;
 
@@ -90,8 +90,15 @@ async function sendTranslatable(html, plainText, extra = {}) {
 const translating = new Set();
 
 async function onCallback(query) {
-  const messageId = query.message?.message_id;
-  if (query.data !== 'tr' || query.message?.chat.id !== chatId || translating.has(messageId)) {
+  if (query.message?.chat.id !== chatId) return telegram.answerCallback(query.id);
+  if (query.data === 'tr') return onTranslateClick(query);
+  if (query.data === 'send' || query.data === 'cancel') return onDraftClick(query);
+  return telegram.answerCallback(query.id);
+}
+
+async function onTranslateClick(query) {
+  const messageId = query.message.message_id;
+  if (translating.has(messageId)) {
     await telegram.answerCallback(query.id);
     return;
   }
@@ -161,8 +168,9 @@ async function createTopic(thread, firstMessage, history) {
     `💡 Начните сообщение с <code>${NOTE_PREFIX}</code> — это внутренняя заметка, покупатель её не увидит.`,
     ...(translationEnabled
       ? [
-          `🌐 Пишите на своём языке — бот переведёт ответ на язык покупателя.`,
-          `Начните с <code>${RAW_PREFIX}</code>, чтобы отправить текст без перевода.`,
+          `🤖 Пишите коротко и на своём языке — ИИ сделает из этого вежливый ответ на языке покупателя.`,
+          `Перед отправкой вы увидите черновик с кнопками ✅ Отправить / ❌ Отмена.`,
+          `Начните с <code>${RAW_PREFIX}</code>, чтобы сразу отправить текст как есть, без ИИ.`,
         ]
       : []),
   ].join('\n');
@@ -232,7 +240,6 @@ async function checkAllegro() {
     if (lastSeenMs && Date.parse(thread.lastMessageDateTime) <= lastSeenMs) continue;
 
     const chrono = (await allegro.listMessages(thread.id)).reverse();
-    store.setLastBuyerText(thread.id, chrono.findLast((m) => m.author?.isInterlocutor && m.text)?.text);
     const fresh = pickNew(chrono, thread, lastSeenMs, firstRun);
     const history = chrono.slice(0, chrono.length - fresh.length).slice(-HISTORY_LIMIT);
 
@@ -271,31 +278,114 @@ function senderName(from) {
   return from.username ? `@${from.username}` : [from.first_name, from.last_name].filter(Boolean).join(' ');
 }
 
-/**
- * Translates the team's reply into the buyer's language (unless it starts with "!")
- * and posts it to Allegro. Returns { language, translation }, or null if sent as typed.
- */
-async function sendToAllegro(link, text) {
-  let outgoing = text;
-  let translated = null;
-  if (text.startsWith(RAW_PREFIX)) {
-    outgoing = text.slice(RAW_PREFIX.length).trim();
-  } else if (translationEnabled) {
-    translated = await translateForBuyer(text, store.lastBuyerText(link.threadId));
-    outgoing = translated.translation;
-  }
-  const sent = await allegro.sendMessage(link.threadId, outgoing);
+async function postToAllegro(threadId, text) {
+  const sent = await allegro.sendMessage(threadId, text);
   if (sent?.id) store.markSentByBot(sent.id);
-  await allegro.markThreadRead(link.threadId).catch(() => {});
-  return translated && translated.translation !== text ? translated : null;
+  await allegro.markThreadRead(threadId).catch(() => {});
 }
 
-function sentTranslationNote(translated) {
-  return `${flag(translated.language)} <i>${escapeHtml(translated.translation)}</i>`;
+/** Recent conversation and the buyer's first name (from a related order), for the AI. */
+async function replyContext(threadId) {
+  const chrono = (await allegro.listMessages(threadId, 8)).reverse();
+  const orderId = chrono.findLast((m) => m.relatesTo?.order?.id)?.relatesTo.order.id;
+  return {
+    conversation: chrono
+      .filter((m) => m.text)
+      .map((m) => ({ fromCustomer: Boolean(m.author?.isInterlocutor), text: m.text.slice(0, 1000) })),
+    firstName: orderId ? await allegro.orderBuyerFirstName(orderId) : null,
+  };
 }
+
+// ---------- AI drafts: preview → Send / Cancel ----------
+
+const DRAFT_BUTTONS = {
+  inline_keyboard: [
+    [
+      { text: '✅ Отправить', callback_data: 'send' },
+      { text: '❌ Отмена', callback_data: 'cancel' },
+    ],
+  ],
+};
+
+function draftHtml(draft, status) {
+  const lines = [status, '', `${flag(draft.language)} ${escapeHtml(draft.reply)}`];
+  if (draft.language !== config.openai.teamLanguage) {
+    lines.push('', `${flag(config.openai.teamLanguage)} <i>${escapeHtml(draft.teamVersion)}</i>`);
+  }
+  return lines.join('\n').slice(0, 4096);
+}
+
+async function showDraft(msg, link, extra) {
+  const ai = await composeReply(msg.text, await replyContext(link.threadId));
+  const draft = { ...ai, threadId: link.threadId, buyerLogin: link.buyerLogin };
+  const preview = await telegram.sendMessage(chatId, draftHtml(draft, '📝 <b>Черновик ответа</b> — проверьте и отправьте:'), {
+    ...extra,
+    reply_markup: DRAFT_BUTTONS,
+  });
+  store.setDraft(preview.message_id, draft);
+}
+
+const handlingDraft = new Set();
+
+async function onDraftClick(query) {
+  const messageId = query.message.message_id;
+  const draft = store.draft(messageId);
+  if (!draft || handlingDraft.has(messageId)) {
+    await telegram.answerCallback(query.id, draft ? undefined : 'Уже обработано');
+    return;
+  }
+
+  handlingDraft.add(messageId);
+  const who = escapeHtml(senderName(query.from));
+  try {
+    if (query.data === 'cancel') {
+      store.forgetDraft(messageId);
+      await telegram.editMessageText(chatId, messageId, draftHtml(draft, `❌ <b>Отменено</b> · ${who}`));
+      await telegram.answerCallback(query.id);
+      return;
+    }
+    await postToAllegro(draft.threadId, draft.reply);
+    store.forgetDraft(messageId);
+    const status = `✅ <b>Отправлено</b> покупателю <b>${escapeHtml(draft.buyerLogin ?? '')}</b> · ${who}`;
+    await telegram.editMessageText(chatId, messageId, draftHtml(draft, status));
+    await telegram.answerCallback(query.id, 'Отправлено');
+  } catch (err) {
+    console.error('Send to Allegro failed:', err.message);
+    // Keep the draft and its buttons so it can be retried.
+    await telegram.answerCallback(query.id, `Не отправлено: ${err.message}`.slice(0, 190));
+  } finally {
+    handlingDraft.delete(messageId);
+  }
+}
+
+// ---------- Team messages ----------
 
 function isMedia(msg) {
   return Boolean(msg.photo || msg.document || msg.video || msg.voice || msg.audio || msg.sticker || msg.video_note);
+}
+
+/**
+ * A team member answered a buyer. With AI on, the note becomes a polished draft to approve;
+ * "!" (or AI off) sends the text exactly as typed.
+ */
+async function handleTeamReply(msg, link, extra) {
+  try {
+    if (translationEnabled && !msg.text.startsWith(RAW_PREFIX)) {
+      await showDraft(msg, link, extra);
+      return;
+    }
+    const text = msg.text.startsWith(RAW_PREFIX) ? msg.text.slice(RAW_PREFIX.length).trim() : msg.text;
+    await postToAllegro(link.threadId, text);
+    if (forumMode) {
+      await telegram.react(chatId, msg.message_id, '👍').catch(() => telegram.sendMessage(chatId, '✅ Отправлено', extra));
+    } else {
+      const by = msg.chat.type === 'private' ? '' : ` · ответил(а) ${escapeHtml(senderName(msg.from))}`;
+      await telegram.sendMessage(chatId, `✅ Отправлено покупателю <b>${escapeHtml(link.buyerLogin ?? '')}</b>${by}`, extra);
+    }
+  } catch (err) {
+    console.error('Team reply failed:', err.message);
+    await telegram.sendMessage(chatId, `❌ Не отправлено: ${escapeHtml(err.message.slice(0, 500))}`, extra);
+  }
 }
 
 async function onTopicMessage(msg) {
@@ -310,20 +400,7 @@ async function onTopicMessage(msg) {
   }
   if (msg.text.startsWith(NOTE_PREFIX)) return; // internal note
 
-  try {
-    const translated = await sendToAllegro(link, msg.text);
-    if (translated) {
-      // Show the team exactly what the buyer received.
-      await telegram.sendMessage(chatId, `✅ Отправлено:\n${sentTranslationNote(translated)}`, inTopic);
-    } else {
-      await telegram.react(chatId, msg.message_id, '👍').catch(() =>
-        telegram.sendMessage(chatId, '✅ Отправлено', inTopic),
-      );
-    }
-  } catch (err) {
-    console.error('Send to Allegro failed:', err.message);
-    await telegram.sendMessage(chatId, `❌ Не отправлено: ${escapeHtml(err.message.slice(0, 500))}`, inTopic);
-  }
+  await handleTeamReply(msg, link, inTopic);
 }
 
 async function onReplyMessage(msg) {
@@ -341,15 +418,7 @@ async function onReplyMessage(msg) {
     return;
   }
 
-  try {
-    const translated = await sendToAllegro(link, msg.text);
-    const by = msg.chat.type === 'private' ? '' : ` · ответил(а) ${escapeHtml(senderName(msg.from))}`;
-    const note = translated ? `\n${sentTranslationNote(translated)}` : '';
-    await telegram.sendMessage(chatId, `✅ Отправлено покупателю <b>${escapeHtml(link.buyerLogin ?? '')}</b>${by}${note}`, replyTo);
-  } catch (err) {
-    console.error('Send to Allegro failed:', err.message);
-    await telegram.sendMessage(chatId, `❌ Не отправлено: ${escapeHtml(err.message.slice(0, 500))}`, replyTo);
-  }
+  await handleTeamReply(msg, link, replyTo);
 }
 
 async function onTelegramMessage(msg) {

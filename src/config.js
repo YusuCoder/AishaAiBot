@@ -29,5 +29,7 @@ export const config = {
     reasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? 'minimal',
     teamLanguage: process.env.TEAM_LANGUAGE || 'Russian',
   },
+  // Used in the signature of AI-written replies, e.g. "Pozdrawiamy, zespół Aisha".
+  shopName: process.env.SHOP_NAME || null,
   pollIntervalMs: Number(process.env.POLL_INTERVAL_SEC || 30) * 1000,
 };

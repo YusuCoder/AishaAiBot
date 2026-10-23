@@ -134,6 +134,16 @@ export const allegro = {
     return api('PUT', `/messaging/threads/${threadId}/read`, { read: true });
   },
 
+  /** Buyer's first name from an order (needs the orders:read scope), or null. */
+  async orderBuyerFirstName(orderId) {
+    try {
+      const order = await api('GET', `/order/checkout-forms/${orderId}`);
+      return order?.buyer?.firstName ?? null;
+    } catch {
+      return null;
+    }
+  },
+
   async offerTitle(offerId) {
     try {
       const offer = await api('GET', `/sale/product-offers/${offerId}`);
