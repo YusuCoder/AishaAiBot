@@ -8,20 +8,20 @@ const chatId = config.telegram.chatId;
 // ---------- Allegro → Telegram ----------
 
 function formatBuyerMessage(thread, message, offerTitle) {
-  const lines = [`💬 <b>${escapeHtml(thread.interlocutor?.login ?? 'Buyer')}</b> · Allegro`];
+  const lines = [`💬 <b>${escapeHtml(thread.interlocutor?.login ?? 'Покупатель')}</b> · Allegro`];
   const offerId = message.relatesTo?.offer?.id;
   const orderId = message.relatesTo?.order?.id;
   if (offerId) {
-    const label = offerTitle ? escapeHtml(offerTitle) : `offer ${offerId}`;
+    const label = offerTitle ? escapeHtml(offerTitle) : `объявление ${offerId}`;
     lines.push(`📦 <a href="https://allegro.pl/oferta/${offerId}">${label}</a>`);
   }
-  if (orderId) lines.push(`🧾 Order <code>${orderId}</code>`);
+  if (orderId) lines.push(`🧾 Заказ <code>${orderId}</code>`);
   if (message.subject) lines.push(`<b>${escapeHtml(message.subject)}</b>`);
-  lines.push('', escapeHtml(message.text || '(no text)'));
+  lines.push('', escapeHtml(message.text || '(без текста)'));
   if (message.attachments?.length) {
-    lines.push('', `📎 ${message.attachments.map((a) => escapeHtml(a.fileName)).join(', ')} (open in Allegro)`);
+    lines.push('', `📎 ${message.attachments.map((a) => escapeHtml(a.fileName)).join(', ')} (откройте в Allegro)`);
   }
-  lines.push('', '<i>↩️ Reply to this message to answer the buyer.</i>');
+  lines.push('', '<i>↩️ Ответьте на это сообщение, чтобы написать покупателю.</i>');
   return lines.join('\n');
 }
 
@@ -69,10 +69,20 @@ async function pollAllegro() {
 
 // ---------- Telegram → Allegro ----------
 
+function senderName(from) {
+  if (!from) return '';
+  return from.username ? `@${from.username}` : [from.first_name, from.last_name].filter(Boolean).join(' ');
+}
+
 async function onTelegramMessage(msg) {
-  if (msg.text === '/start' || msg.text === '/id') {
-    const note = chatId === msg.chat.id ? '✅ This chat is connected.' : 'Put this id into TELEGRAM_CHAT_ID in .env and restart.';
-    await telegram.sendMessage(msg.chat.id, `Your chat id: <code>${msg.chat.id}</code>\n${note}`);
+  // In groups commands arrive as "/start@YourBot".
+  const command = msg.text?.startsWith('/') ? msg.text.split(/[@\s]/)[0] : null;
+  if (command === '/start' || command === '/id') {
+    const note =
+      chatId === msg.chat.id
+        ? '✅ Этот чат подключён.'
+        : 'Укажите этот id в TELEGRAM_CHAT_ID в файле .env и перезапустите бота.';
+    await telegram.sendMessage(msg.chat.id, `ID вашего чата: <code>${msg.chat.id}</code>\n${note}`);
     return;
   }
   if (msg.chat.id !== chatId) return; // ignore strangers
@@ -80,13 +90,15 @@ async function onTelegramMessage(msg) {
   const repliedTo = msg.reply_to_message?.message_id;
   const link = repliedTo && store.threadForTelegramMessage(repliedTo);
   if (!link) {
-    await telegram.sendMessage(chatId, 'To answer a buyer, <b>reply</b> (swipe left) to their message.', {
+    // In a group people also talk to each other — only hint in a private chat.
+    if (msg.chat.type !== 'private') return;
+    await telegram.sendMessage(chatId, 'Чтобы ответить покупателю, нажмите <b>«Ответить»</b> на его сообщение (свайп влево).', {
       reply_parameters: { message_id: msg.message_id },
     });
     return;
   }
   if (!msg.text) {
-    await telegram.sendMessage(chatId, 'Only text replies are supported for now.', {
+    await telegram.sendMessage(chatId, 'Пока можно отправлять только текстовые ответы.', {
       reply_parameters: { message_id: msg.message_id },
     });
     return;
@@ -95,12 +107,13 @@ async function onTelegramMessage(msg) {
   try {
     await allegro.sendMessage(link.threadId, msg.text);
     await allegro.markThreadRead(link.threadId).catch(() => {});
-    await telegram.sendMessage(chatId, `✅ Sent to <b>${escapeHtml(link.buyerLogin ?? 'buyer')}</b>`, {
+    const by = msg.chat.type === 'private' ? '' : ` · ответил(а) ${escapeHtml(senderName(msg.from))}`;
+    await telegram.sendMessage(chatId, `✅ Отправлено покупателю <b>${escapeHtml(link.buyerLogin ?? '')}</b>${by}`, {
       reply_parameters: { message_id: msg.message_id },
     });
   } catch (err) {
     console.error('Send to Allegro failed:', err.message);
-    await telegram.sendMessage(chatId, `❌ Not sent: ${escapeHtml(err.message.slice(0, 500))}`, {
+    await telegram.sendMessage(chatId, `❌ Не отправлено: ${escapeHtml(err.message.slice(0, 500))}`, {
       reply_parameters: { message_id: msg.message_id },
     });
   }
@@ -119,9 +132,9 @@ async function main() {
   if (!store.tokens) {
     await authorizeDevice(async (url) => {
       console.log(`\nOpen this link and approve the app in Allegro:\n${url}\n`);
-      await telegram.sendMessage(chatId, `🔐 Connect your Allegro account:\n${url}`);
+      await telegram.sendMessage(chatId, `🔐 Подключите аккаунт Allegro — откройте ссылку и подтвердите доступ:\n${url}`);
     });
-    await telegram.sendMessage(chatId, '✅ Allegro connected. New buyer messages will appear here.');
+    await telegram.sendMessage(chatId, '✅ Allegro подключён. Новые сообщения покупателей будут приходить сюда.');
   }
 
   console.log('Running. Checking Allegro every', config.pollIntervalMs / 1000, 'seconds.');
