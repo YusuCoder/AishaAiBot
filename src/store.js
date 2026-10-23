@@ -77,6 +77,33 @@ export const store = {
     return null;
   },
 
+  // The buyer's latest message per thread — tells the translator which language to reply in.
+  lastBuyerText(threadId) {
+    return state.lastBuyerTexts?.[threadId] ?? null;
+  },
+  setLastBuyerText(threadId, text) {
+    if (!text || state.lastBuyerTexts?.[threadId] === text) return;
+    state.lastBuyerTexts = { ...state.lastBuyerTexts, [threadId]: text.slice(0, 1000) };
+    save();
+  },
+
+  // Telegram messages with a "Translate" button: what to translate and how to redraw them.
+  setTranslatable(telegramMessageId, item) {
+    state.translatables = { ...state.translatables, [telegramMessageId]: item };
+    const keys = Object.keys(state.translatables);
+    if (keys.length > MAX_LINKS) {
+      for (const key of keys.slice(0, keys.length - MAX_LINKS)) delete state.translatables[key];
+    }
+    save();
+  },
+  translatable(telegramMessageId) {
+    return state.translatables?.[telegramMessageId] ?? null;
+  },
+  forgetTranslatable(telegramMessageId) {
+    delete state.translatables?.[telegramMessageId];
+    save();
+  },
+
   // Allegro message ids we sent from Telegram, so we don't echo them back.
   markSentByBot(messageId) {
     state.sentIds.push(messageId);

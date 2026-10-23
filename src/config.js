@@ -22,5 +22,12 @@ export const config = {
     token: required('TELEGRAM_BOT_TOKEN'),
     chatId: process.env.TELEGRAM_CHAT_ID ? Number(process.env.TELEGRAM_CHAT_ID) : null,
   },
+  // Optional: without a key the bot works as before, just without translation.
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY || null,
+    model: process.env.OPENAI_MODEL || 'gpt-5-mini',
+    reasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? 'minimal',
+    teamLanguage: process.env.TEAM_LANGUAGE || 'Russian',
+  },
   pollIntervalMs: Number(process.env.POLL_INTERVAL_SEC || 30) * 1000,
 };

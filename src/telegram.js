@@ -49,17 +49,39 @@ export const telegram = {
     });
   },
 
-  /** Long-polls Telegram forever and passes every incoming message to the handler. */
-  async listen(onMessage) {
+  editMessageText(chatId, messageId, text, extra = {}) {
+    return call('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      ...extra,
+    });
+  },
+
+  answerCallback(callbackQueryId, text) {
+    return call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
+  },
+
+  /** Long-polls Telegram forever and passes messages and button presses to the handlers. */
+  async listen(onMessage, onCallback) {
     let offset = 0;
     for (;;) {
       try {
-        const updates = await call('getUpdates', { offset, timeout: 50, allowed_updates: ['message'] });
+        const updates = await call('getUpdates', {
+          offset,
+          timeout: 50,
+          allowed_updates: ['message', 'callback_query'],
+        });
         for (const update of updates) {
           offset = update.update_id + 1;
-          if (update.message) {
-            await onMessage(update.message).catch((err) => console.error('Telegram handler error:', err));
-          }
+          const handle = update.message
+            ? onMessage(update.message)
+            : update.callback_query
+              ? onCallback(update.callback_query)
+              : null;
+          await handle?.catch((err) => console.error('Telegram handler error:', err));
         }
       } catch (err) {
         console.error('Telegram polling error:', err.message);
