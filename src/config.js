@@ -31,5 +31,10 @@ export const config = {
   },
   // Used in the signature of AI-written replies, e.g. "Pozdrawiamy, zespół Aisha".
   shopName: process.env.SHOP_NAME || null,
+  // Optional: connects the bot to the web CRM.
+  supabase: {
+    url: process.env.SUPABASE_URL || null,
+    serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || null,
+  },
   pollIntervalMs: Number(process.env.POLL_INTERVAL_SEC || 30) * 1000,
 };

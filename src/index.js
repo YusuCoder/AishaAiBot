@@ -3,6 +3,7 @@ import { store } from './store.js';
 import { allegro, authorizeDevice } from './allegro.js';
 import { telegram, escapeHtml } from './telegram.js';
 import { translationEnabled, translateForTeam, composeReply } from './translate.js';
+import { crmEnabled, startCrm } from './crm.js';
 
 const chatId = config.telegram.chatId;
 
@@ -228,7 +229,7 @@ async function forwardToTopic(thread, message, history) {
     text = [`💬 ${messageBody(message)}`, ...contextLines(message, title)].join('\n');
   } else {
     // The seller answered on allegro.pl directly — mirror it so the topic has the full conversation.
-    text = `📤 <i>Ответ с сайта Allegro:</i>\n${messageBody(message)}`;
+    text = `📤 <i>Ответ из CRM или с сайта Allegro:</i>\n${messageBody(message)}`;
   }
   await sendToTopic(thread, message, history, text);
 }
@@ -359,7 +360,7 @@ function issueMessageHtml(m) {
   const attachments = m.attachments?.length ? `\n📎 Вложений: ${m.attachments.length} (откройте в Allegro)` : '';
   const text = escapeHtml(m.text || '(без текста)');
   if (m.author?.role === 'BUYER') return `💬 ${text}${attachments}`;
-  if (m.author?.role === 'SELLER') return `📤 <i>Ответ с сайта Allegro:</i>\n${text}${attachments}`;
+  if (m.author?.role === 'SELLER') return `📤 <i>Ответ из CRM или с сайта Allegro:</i>\n${text}${attachments}`;
   return `🛡 <b>Allegro:</b>\n${text}${attachments}`;
 }
 
@@ -676,6 +677,7 @@ async function main() {
     `Running in ${forumMode ? 'topics' : 'reply'} mode, translation ${translationEnabled ? `on (${config.openai.model})` : 'off'}. Checking Allegro every ${config.pollIntervalMs / 1000} seconds.`,
   );
   pollAllegro();
+  if (crmEnabled) startCrm();
 }
 
 main().catch((err) => {
