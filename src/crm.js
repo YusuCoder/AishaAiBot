@@ -4,6 +4,7 @@
 import { config } from './config.js';
 import { allegro } from './allegro.js';
 import { composeReply, translateForTeam, translationEnabled } from './translate.js';
+import { runListingAudit } from './listings.js';
 
 const { url, serviceKey } = config.supabase;
 const ISSUE_PREFIX = 'issue:';
@@ -221,6 +222,19 @@ async function translateRequested() {
   }
 }
 
+let auditRunning = false;
+
+async function startRequestedAudit() {
+  if (auditRunning) return;
+  const [audit] = await db('GET', 'listing_audits?status=eq.pending&select=id&limit=1');
+  if (!audit) return;
+  auditRunning = true;
+  // Runs alongside the queue, so replies aren't held up while listings are analyzed.
+  runListingAudit(audit.id, db)
+    .catch((err) => console.error('Listing audit failed:', err.message))
+    .finally(() => (auditRunning = false));
+}
+
 async function processQueue() {
   const items = await db('GET', 'conversation_outbox?status=in.(composing,approved)&select=*&order=created_at');
   for (const item of items) {
@@ -228,6 +242,7 @@ async function processQueue() {
     else await sendReply(item);
   }
   await translateRequested();
+  await startRequestedAudit();
 }
 
 async function loop(task, name, intervalMs) {

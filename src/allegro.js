@@ -152,6 +152,64 @@ export const allegro = {
     }
   },
 
+  // ----- Offers, for the listing analyzer. Read only. -----
+
+  async listActiveOffers() {
+    const offers = [];
+    for (let offset = 0; ; offset += 100) {
+      const page = await api('GET', `/sale/offers?publication.status=ACTIVE&limit=100&offset=${offset}`);
+      offers.push(...page.offers);
+      if (offers.length >= page.totalCount || page.offers.length === 0) return offers;
+    }
+  },
+
+  offerDetails(offerId) {
+    return api('GET', `/sale/product-offers/${offerId}`);
+  },
+
+  offerSmart(offerId) {
+    return api('GET', `/sale/offers/${offerId}/smart`).catch(() => null);
+  },
+
+  offerRating(offerId) {
+    return api('GET', `/sale/offers/${offerId}/rating`).catch(() => null);
+  },
+
+  async categoryName(categoryId) {
+    return (await api('GET', `/sale/categories/${categoryId}`).catch(() => null))?.name ?? null;
+  },
+
+  /** Unfilled parameters by offer id. */
+  async unfilledParameters() {
+    const missing = new Map();
+    for (let offset = 0; ; offset += 100) {
+      const page = await api('GET', `/sale/offers/unfilled-parameters?limit=100&offset=${offset}`).catch(() => null);
+      if (!page?.offers?.length) return missing;
+      for (const offer of page.offers) missing.set(offer.id, offer.parameters ?? []);
+      if (offset + page.offers.length >= page.totalCount) return missing;
+    }
+  },
+
+  /** Units sold and revenue per offer since a date, from paid orders. */
+  async salesSince(date) {
+    const sales = new Map();
+    for (let offset = 0; ; offset += 100) {
+      const page = await api(
+        'GET',
+        `/order/checkout-forms?status=READY_FOR_PROCESSING&lineItems.boughtAt.gte=${date.toISOString()}&limit=100&offset=${offset}`,
+      );
+      for (const order of page.checkoutForms) {
+        for (const item of order.lineItems) {
+          const row = sales.get(item.offer.id) ?? { units: 0, revenue: 0 };
+          row.units += item.quantity;
+          row.revenue += item.quantity * Number(item.price.amount);
+          sales.set(item.offer.id, row);
+        }
+      }
+      if (offset + page.checkoutForms.length >= page.totalCount || page.checkoutForms.length === 0) return sales;
+    }
+  },
+
   // ----- Post-purchase issues: disputes (DISPUTE) and complaints (CLAIM) -----
 
   /** Most recent issues first. */
